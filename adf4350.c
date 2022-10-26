@@ -44,6 +44,7 @@ struct adf4350_state {
 	struct gpio_desc		*lock_detect_gpiod;
 	struct adf4350_platform_data	*pdata;
 	struct clk			*clk;
+	struct clk			*clkout;
 	const char 			*clk_out_name;
 	struct adf4350_output		output;
 	unsigned long			clkin;
@@ -250,10 +251,20 @@ static ssize_t adf4350_write(struct iio_dev *indio_dev,
 	if (ret)
 		return ret;
 
-	mutex_lock(&st->lock);
 	switch ((u32)private) {
 	case ADF4350_FREQ:
-		ret = adf4350_set_freq(st, readin);
+		printk("clkout: %p", st->clkout);
+		if (st->clkout) {
+			printk("write_freq \n");
+			tmp = clk_round_rate(st->clkout, readin);
+			if (tmp != readin) {
+				ret = -EINVAL;
+				break;
+			}
+			ret = clk_set_rate(st->clkout, tmp);
+			if (ret < 0)
+				break;
+		}
 		break;
 	case ADF4350_FREQ_REFIN:
 		if (readin > ADF4350_MAX_FREQ_REFIN) {
@@ -271,27 +282,32 @@ static ssize_t adf4350_write(struct iio_dev *indio_dev,
 			if (ret < 0)
 				break;
 		}
+		mutex_lock(&st->lock);
 		st->clkin = readin;
-		ret = adf4350_set_freq(st, st->freq_req);
+		mutex_unlock(&st->lock);
+		ret = clk_set_rate(st->clkout, st->freq_req);
 		break;
 	case ADF4350_FREQ_RESOLUTION:
+		mutex_lock(&st->lock);
 		if (readin == 0)
 			ret = -EINVAL;
 		else
 			st->chspc = readin;
+		mutex_unlock(&st->lock);
 		break;
 	case ADF4350_PWRDOWN:
+		mutex_lock(&st->lock);
 		if (readin)
 			st->regs[ADF4350_REG2] |= ADF4350_REG2_POWER_DOWN_EN;
 		else
 			st->regs[ADF4350_REG2] &= ~ADF4350_REG2_POWER_DOWN_EN;
 
 		adf4350_sync_config(st, true);
+		mutex_unlock(&st->lock);
 		break;
 	default:
 		ret = -EINVAL;
 	}
-	mutex_unlock(&st->lock);
 
 	return ret ? ret : len;
 }
@@ -389,7 +405,7 @@ static unsigned long adf4350_clk_recalc_rate(struct clk_hw *hw,
 
 	tmp = (u64)((st->r0_int * st->r1_mod) + st->r0_fract) *
 			st->fpfd;
-
+	
 	do_div(tmp, st->r1_mod * (1 << st->r4_rf_div_sel));
 
 	return tmp;
@@ -416,6 +432,7 @@ static int adf4350_clk_set_rate(struct clk_hw *hw,
 	if (st->clkin != parent_rate)
 		st->clkin = parent_rate;
 
+	printk("set_rate_frequency\n");
 	ret = adf4350_set_freq(st, rate);
 	mutex_unlock(&st->lock);
 
@@ -485,13 +502,15 @@ static int adf4350_clk_register(struct adf4350_state *st)
 	init.num_parents = 1;
 
 	st->output.hw.init = &init;
-	clk = devm_clk_hw_register(&spi->dev, &st->output.hw);
+	clk = devm_clk_register(&spi->dev, &st->output.hw);
 	if (IS_ERR(clk))
 		return PTR_ERR(clk);
 
 	ret = of_clk_add_provider(spi->dev.of_node, of_clk_src_simple_get, clk);
 	if (ret)
 		return ret;
+
+	st->clkout = clk;
 
 	return devm_add_action_or_reset(&spi->dev, adf4350_clk_del_provider, st);
 }
