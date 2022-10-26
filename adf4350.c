@@ -382,11 +382,21 @@ static unsigned long adf4350_clk_recalc_rate(struct clk_hw *hw,
 {
 	struct iio_dev *indio_dev = to_output(hw)->indio_dev;
 	struct adf4350_state *st = iio_priv(indio_dev);
-	int tmp;
+	unsigned long tmp;
 
 	tmp = div_u64(st->freq_req, st->clkin);
 
-	return DIV_ROUND_CLOSEST_ULL((uint64_t)parent_rate, tmp);
+	tmp = DIV_ROUND_CLOSEST_ULL((uint64_t)parent_rate, tmp);
+
+	printk("recalc rate value: %lu\n", tmp);
+
+	return tmp;
+}
+
+static long adf4350_clk_round_rate(struct clk_hw *hw, unsigned long rate,
+				  unsigned long *prate)
+{
+	return rate;
 }
 
 static int adf4350_clk_set_rate(struct clk_hw *hw,
@@ -440,6 +450,7 @@ static int adf4350_clk_is_enabled(struct clk_hw *hw)
 
 static const struct clk_ops adf4350_clk_ops = {
 	.recalc_rate = adf4350_clk_recalc_rate,
+	.round_rate = adf4350_clk_round_rate,
 	.set_rate = adf4350_clk_set_rate,
 	.prepare = adf4350_clk_prepare,
 	.unprepare = adf4350_clk_unprepare,
@@ -454,14 +465,19 @@ static int adf4350_clk_register(struct adf4350_state *st)
 	const char *parent_name;
 	int ret;
 
+	printk("adf4350_clk_register\n");
+
+	init.name = spi->dev.of_node->name;
+	device_property_read_string(&spi->dev, "clock-output-names",
+					  &init.name);
+
 	parent_name = of_clk_get_parent_name(spi->dev.of_node, 0);
 	if (!parent_name)
 		return -EINVAL;
 
-	printk("clk_out_name: %s", st->clk_out_name);
-	printk("clk_parent_name: %s", parent_name);
+	printk("clk_out_name: %s\n", init.name);
+	printk("clk_parent_name: %s\n", parent_name);
 
-	init.name = st->clk_out_name;
 	init.ops = &adf4350_clk_ops;
 	init.parent_names = &parent_name;
 	init.num_parents = 1;
@@ -481,8 +497,8 @@ static int adf4350_clk_register(struct adf4350_state *st)
 static struct adf4350_platform_data *adf4350_parse_dt(struct device *dev)
 {
 	struct adf4350_platform_data *pdata;
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct adf4350_state *st = iio_priv(indio_dev);
+	// struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	// struct adf4350_state *st = iio_priv(indio_dev);
 	unsigned int tmp;
 	int ret;
 
@@ -492,10 +508,10 @@ static struct adf4350_platform_data *adf4350_parse_dt(struct device *dev)
 
 	strncpy(&pdata->name[0], dev_name(dev), SPI_NAME_SIZE - 1);
 
-	ret = device_property_read_string(dev, "clock-output-names",
-					  &st->clk_out_name);
-	if ((ret < 0) && dev->of_node)
-		st->clk_out_name = dev->of_node->name;
+	// if ((ret < 0) && dev->of_node)
+	// 	st->clk_out_name = dev->of_node->name;
+
+	// printk("dt clk_out_name %s\n", st->clk_out_name);
 
 	if (device_property_read_u32(dev, "adi,channel-spacing", &tmp))
 		tmp = 10000;
@@ -714,6 +730,8 @@ static int adf4350_probe(struct spi_device *spi)
 
 	st->regs[ADF4350_REG5] = ADF4350_REG5_LD_PIN_MODE_DIGITAL |
 				BIT(19) | BIT(20);
+
+	printk("power_up_freq\n");
 
 	if (pdata->power_up_frequency) {
 		ret = adf4350_set_freq(st, pdata->power_up_frequency);
