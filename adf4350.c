@@ -485,7 +485,7 @@ static int adf4350_clk_register(struct adf4350_state *st)
 	init.num_parents = 1;
 
 	st->output.hw.init = &init;
-	clk = devm_clk_register(&spi->dev, &st->output.hw);
+	clk = devm_clk_hw_register(&spi->dev, &st->output.hw);
 	if (IS_ERR(clk))
 		return PTR_ERR(clk);
 
@@ -665,6 +665,8 @@ static int adf4350_probe(struct spi_device *spi)
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = &adf4350_chan;
 	indio_dev->num_channels = 1;
+	indio_dev->dev.parent = &spi->dev;
+	st->output.indio_dev = indio_dev;
 
 	mutex_init(&st->lock);
 
