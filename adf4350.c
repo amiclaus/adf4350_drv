@@ -380,15 +380,17 @@ static void adf4350_clk_del_provider(void *data)
 static unsigned long adf4350_clk_recalc_rate(struct clk_hw *hw,
 					     unsigned long parent_rate)
 {
+	printk("hw: %p\n", hw);
 	struct iio_dev *indio_dev = to_output(hw)->indio_dev;
+	printk("indio_dev: %p\n", indio_dev);
 	struct adf4350_state *st = iio_priv(indio_dev);
-	unsigned long tmp;
+	printk("st: %p\n", st);
+	unsigned long long tmp;
 
-	tmp = div_u64(st->freq_req, st->clkin);
+	tmp = (u64)((st->r0_int * st->r1_mod) + st->r0_fract) *
+			st->fpfd;
 
-	tmp = DIV_ROUND_CLOSEST_ULL((uint64_t)parent_rate, tmp);
-
-	printk("recalc rate value: %lu\n", tmp);
+	do_div(tmp, st->r1_mod * (1 << st->r4_rf_div_sel));
 
 	return tmp;
 }
