@@ -45,7 +45,7 @@ struct adf4350_state {
 	struct adf4350_platform_data	*pdata;
 	struct clk			*clk;
 	struct clk			*clkout;
-	const char 			*clk_out_name;
+	const char			*clk_out_name;
 	struct adf4350_output		output;
 	unsigned long			clkin;
 	unsigned long			chspc; /* Channel Spacing */
@@ -251,19 +251,16 @@ static ssize_t adf4350_write(struct iio_dev *indio_dev,
 	if (ret)
 		return ret;
 
+	mutex_lock(&st->lock);
 	switch ((u32)private) {
 	case ADF4350_FREQ:
-		printk("clkout: %p", st->clkout);
 		if (st->clkout) {
-			printk("write_freq \n");
 			tmp = clk_round_rate(st->clkout, readin);
 			if (tmp != readin) {
 				ret = -EINVAL;
 				break;
 			}
 			ret = clk_set_rate(st->clkout, tmp);
-			if (ret < 0)
-				break;
 		}
 		break;
 	case ADF4350_FREQ_REFIN:
@@ -282,32 +279,27 @@ static ssize_t adf4350_write(struct iio_dev *indio_dev,
 			if (ret < 0)
 				break;
 		}
-		mutex_lock(&st->lock);
 		st->clkin = readin;
-		mutex_unlock(&st->lock);
-		ret = clk_set_rate(st->clkout, st->freq_req);
+		ret = adf4350_set_freq(st, st->freq_req);
 		break;
 	case ADF4350_FREQ_RESOLUTION:
-		mutex_lock(&st->lock);
 		if (readin == 0)
 			ret = -EINVAL;
 		else
 			st->chspc = readin;
-		mutex_unlock(&st->lock);
 		break;
 	case ADF4350_PWRDOWN:
-		mutex_lock(&st->lock);
 		if (readin)
 			st->regs[ADF4350_REG2] |= ADF4350_REG2_POWER_DOWN_EN;
 		else
 			st->regs[ADF4350_REG2] &= ~ADF4350_REG2_POWER_DOWN_EN;
 
 		adf4350_sync_config(st, true);
-		mutex_unlock(&st->lock);
 		break;
 	default:
 		ret = -EINVAL;
 	}
+	mutex_unlock(&st->lock);
 
 	return ret ? ret : len;
 }
@@ -396,23 +388,20 @@ static void adf4350_clk_del_provider(void *data)
 static unsigned long adf4350_clk_recalc_rate(struct clk_hw *hw,
 					     unsigned long parent_rate)
 {
-	printk("hw: %p\n", hw);
 	struct iio_dev *indio_dev = to_output(hw)->indio_dev;
-	printk("indio_dev: %p\n", indio_dev);
 	struct adf4350_state *st = iio_priv(indio_dev);
-	printk("st: %p\n", st);
 	unsigned long long tmp;
 
 	tmp = (u64)((st->r0_int * st->r1_mod) + st->r0_fract) *
 			st->fpfd;
-	
+
 	do_div(tmp, st->r1_mod * (1 << st->r4_rf_div_sel));
 
 	return tmp;
 }
 
 static long adf4350_clk_round_rate(struct clk_hw *hw, unsigned long rate,
-				  unsigned long *prate)
+				   unsigned long *prate)
 {
 	return rate;
 }
@@ -423,20 +412,14 @@ static int adf4350_clk_set_rate(struct clk_hw *hw,
 {
 	struct iio_dev *indio_dev = to_output(hw)->indio_dev;
 	struct adf4350_state *st = iio_priv(indio_dev);
-	int ret;
 
-	if ((parent_rate == 0) || (parent_rate > ADF4350_MAX_FREQ_REFIN))
+	if (parent_rate == 0 || parent_rate > ADF4350_MAX_FREQ_REFIN)
 		return -EINVAL;
 
-	mutex_lock(&st->lock);
 	if (st->clkin != parent_rate)
 		st->clkin = parent_rate;
 
-	printk("set_rate_frequency\n");
-	ret = adf4350_set_freq(st, rate);
-	mutex_unlock(&st->lock);
-
-	return ret;
+	return adf4350_set_freq(st, rate);
 }
 
 static int adf4350_clk_prepare(struct clk_hw *hw)
@@ -484,18 +467,13 @@ static int adf4350_clk_register(struct adf4350_state *st)
 	const char *parent_name;
 	int ret;
 
-	printk("adf4350_clk_register\n");
-
 	init.name = spi->dev.of_node->name;
 	device_property_read_string(&spi->dev, "clock-output-names",
-					  &init.name);
+				    &init.name);
 
 	parent_name = of_clk_get_parent_name(spi->dev.of_node, 0);
 	if (!parent_name)
 		return -EINVAL;
-
-	printk("clk_out_name: %s\n", init.name);
-	printk("clk_parent_name: %s\n", parent_name);
 
 	init.ops = &adf4350_clk_ops;
 	init.parent_names = &parent_name;
@@ -518,21 +496,13 @@ static int adf4350_clk_register(struct adf4350_state *st)
 static struct adf4350_platform_data *adf4350_parse_dt(struct device *dev)
 {
 	struct adf4350_platform_data *pdata;
-	// struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	// struct adf4350_state *st = iio_priv(indio_dev);
 	unsigned int tmp;
-	int ret;
 
 	pdata = devm_kzalloc(dev, sizeof(*pdata), GFP_KERNEL);
 	if (!pdata)
 		return ERR_PTR(-ENOMEM);
 
 	strncpy(&pdata->name[0], dev_name(dev), SPI_NAME_SIZE - 1);
-
-	// if ((ret < 0) && dev->of_node)
-	// 	st->clk_out_name = dev->of_node->name;
-
-	// printk("dt clk_out_name %s\n", st->clk_out_name);
 
 	if (device_property_read_u32(dev, "adi,channel-spacing", &tmp))
 		tmp = 10000;
@@ -753,8 +723,6 @@ static int adf4350_probe(struct spi_device *spi)
 
 	st->regs[ADF4350_REG5] = ADF4350_REG5_LD_PIN_MODE_DIGITAL |
 				BIT(19) | BIT(20);
-
-	printk("power_up_freq\n");
 
 	if (pdata->power_up_frequency) {
 		ret = adf4350_set_freq(st, pdata->power_up_frequency);
